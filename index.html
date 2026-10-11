@@ -71,6 +71,7 @@
     .seg button { border-bottom: 1px solid var(--border); }
   }
   .seg button.active { background: var(--accent); color: #fff; }
+  .seg button small { font-family: var(--mono); font-size: .75rem; opacity: .75; }
 
   .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 800px) { .panes { grid-template-columns: 1fr; } }
@@ -147,12 +148,20 @@
     <div class="group">
       <span class="label">目標</span>
       <div class="seg" id="target">
-        <button data-t="latex">LaTeX</button>
-        <button data-t="markdown" class="active">Markdown</button>
-        <button data-t="github">GitHub</button>
-        <button data-t="mathml">MathML</button>
-        <button data-t="typst">Typst</button>
+        <button data-t="latex" title="行內 \( … \)、獨立 \[ … \]（ChatGPT、Anki、LaTeX 文件）">LaTeX <small>\( \)</small></button>
+        <button data-t="markdown" class="active" title="行內 $…$、獨立 $$…$$（Obsidian、Typora、Jupyter）">Markdown <small>$ $</small></button>
+        <button data-t="github" title="行內 $`…`$、獨立 ```math 區塊">GitHub <small>$` `$</small></button>
+        <button data-t="mathml" title="<math> 標籤">MathML</button>
+        <button data-t="typst" title="行內 $x$、獨立 $ x $">Typst</button>
       </div>
+    </div>
+    <div class="group">
+      <span class="label">連續的獨立公式</span>
+      <select id="merge">
+        <option value="none">不合併</option>
+        <option value="gather" selected>合併：gather（每列置中）</option>
+        <option value="align">合併：align（等號對齊）</option>
+      </select>
     </div>
   </div>
 
@@ -216,6 +225,14 @@ const SAMPLES = {
 x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}
 \\]
 其中判別式為 \\( \\Delta = b^2 - 4ac \\)。
+
+平均數與變異數（連續兩條獨立公式會自動合併）：
+\\[
+\\mu=\\frac{1}{512}\\sum_{j=1}^{512}u_j
+\\]
+\\[
+\\sigma^2=\\frac{1}{512}\\sum_{j=1}^{512}(u_j-\\mu)^2
+\\]
 
 高斯積分：
 \\begin{equation}
@@ -418,6 +435,66 @@ function fromLatex(tex, display, target, L) {
   }
 }
 
+/* ================== 合併連續的獨立公式 ================== */
+// 在第一個最外層的「=」前面加上對齊符號 &
+function addAlignMark(tex) {
+  let depth = 0;
+  for (let i = 0; i < tex.length; i++) {
+    const c = tex[i];
+    if (c === "\\") { i++; continue; }
+    if (c === "{") depth++;
+    else if (c === "}") depth--;
+    else if (c === "=" && depth === 0) return tex.slice(0, i) + "&" + tex.slice(i);
+  }
+  return "&" + tex;
+}
+
+function mergeDisplays(segs) {
+  const res = [];
+  for (let k = 0; k < segs.length; k++) {
+    const s = segs[k];
+    if (!(s.type === "math" && s.display && !s.error)) { res.push(s); continue; }
+    const group = [s];
+    let srcText = s.src, j = k + 1;
+    while (j + 1 < segs.length && segs[j].type === "text" && !segs[j].value.trim()
+           && segs[j + 1].type === "math" && segs[j + 1].display && !segs[j + 1].error) {
+      srcText += segs[j].value + segs[j + 1].src;
+      group.push(segs[j + 1]);
+      j += 2;
+    }
+    if (group.length === 1) { res.push(s); continue; }
+    const mode = $("merge").value;
+    const parts = group.map(g => g.tex.replace(/\s*\n\s*/g, " ").trim());
+    const env = mode === "align" ? "align" : "gather";
+    const rows = mode === "align" ? parts.map(addAlignMark) : parts;
+    const body = rows.join(" \\\\ ");
+    res.push({
+      type: "math", display: true, lang: s.lang, src: srcText, parts: rows,
+      tex: `\\begin{${env}} ${body} \\end{${env}}`,
+      previewTex: `\\begin{${env}*} ${body} \\end{${env}*}`   // 預覽不顯示編號
+    });
+    k = j - 1;
+  }
+  return res;
+}
+
+function fromMerged(s, target, L) {
+  if (target === "mathml") return fromLatex(s.previewTex, true, target, L);
+  if (target === "typst") {
+    if (!L.tex2typst) throw new Error("Typst 轉換套件尚未載入");
+    // Typst 用「\」換列、「&」對齊
+    const rows = s.parts.map(p => {
+      const amp = p.indexOf("&") === 0 ? "&" : "";
+      const body = p.replace("&", "");
+      let ty = L.tex2typst(body).trim();
+      if (p.includes("&") && !amp) ty = ty.replace(/=/, "&=");
+      return amp + ty;
+    });
+    return `$ ${rows.join(" \\\n  ")} $`;
+  }
+  return fromLatex(s.tex, true, target, L);
+}
+
 /* ================== 4. 主流程 ================== */
 let target = "markdown";
 
@@ -440,10 +517,26 @@ function convert() {
     return;
   }
 
-  const segs = scan(text, src === "typst" ? "typst" : "markdown");
+  const raw = scan(text, src === "typst" ? "typst" : "markdown");
   let out = "", html = "";
   let needNL = false, inline = 0, block = 0, ok = 0, fail = 0;
   const errors = [];
+
+  // 先把每個公式轉成 LaTeX
+  for (const s of raw) {
+    if (s.type !== "math") continue;
+    s.display ? block++ : inline++;
+    try {
+      s.tex = toLatex(s, L);
+      if (!s.tex) throw new Error("公式內容是空的");
+    } catch (e) {
+      s.error = e.message || String(e);
+    }
+  }
+  // 合併連續的獨立公式（中間只隔著空白或換行）
+  const mergeMode = $("merge").value;
+  const segs = mergeMode === "none" ? raw : mergeDisplays(raw);
+  const groups = segs.filter(s => s.parts).length;
 
   const emit = (str, cls, title) => {
     out += str;
@@ -458,19 +551,18 @@ function convert() {
       emit(v);
       continue;
     }
-    s.display ? block++ : inline++;
+    const n = s.parts ? s.parts.length : 1;
     try {
-      const tex = toLatex(s, L);
-      if (!tex) throw new Error("公式內容是空的");
-      s.tex = tex;
-      const res = fromLatex(tex, s.display, target, L);
+      if (s.error) throw new Error(s.error);
+      const res = s.parts ? fromMerged(s, target, L) : fromLatex(s.tex, s.display, target, L);
       // 獨立公式自己一行
       if (s.display && out && !/\n$/.test(out)) { out = out.replace(/[ \t]+$/, ""); html = html.replace(/[ \t]+$/, ""); emit("\n"); }
-      emit(res, "conv", `來源：${NAMES[s.lang === "latex" ? (src || "latex") : s.lang]}`);
+      const from = NAMES[s.lang === "latex" ? (src || "latex") : s.lang];
+      emit(res, "conv", s.parts ? `來源：${from}（已合併 ${n} 條公式）` : `來源：${from}`);
       needNL = s.display;
-      ok++;
+      ok += n;
     } catch (e) {
-      fail++;
+      fail += n;
       s.error = e.message || String(e);
       errors.push(s.error);
       emit(s.src, "fail", "轉換失敗：" + s.error);
@@ -487,6 +579,7 @@ function convert() {
     ? "沒有偵測到公式，內容保持原樣。"
     : `<span>來源：<b>${NAMES[src] || "—"}</b> → 目標：<b>${NAMES[target]}</b></span>
        <span>偵測到 <b>${inline}</b> 個行內公式、<b>${block}</b> 個獨立公式</span>
+       ${groups ? `<span>合併成 <b>${groups}</b> 組多列公式</span>` : ""}
        <span class="ok">成功 ${ok}</span>
        <span class="${fail ? "err" : ""}">失敗 ${fail}</span>`;
 
@@ -503,7 +596,7 @@ function convert() {
   for (const s of segs) {
     if (s.type === "text") { pv += s.render; continue; }
     if (s.error || !L.katex) { pv += `<span class="fail" title="${esc(s.error || "KaTeX 尚未載入")}">${esc(s.src)}</span>`; continue; }
-    pv += L.katex.renderToString(s.tex, { displayMode: s.display, throwOnError: false });
+    pv += L.katex.renderToString(s.previewTex || s.tex, { displayMode: s.display, throwOnError: false });
   }
   $("preview").innerHTML = pv;
 }
@@ -512,6 +605,7 @@ function convert() {
 let lastOutput = "", timer;
 $("input").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(convert, 120); });
 $("source").addEventListener("change", convert);
+$("merge").addEventListener("change", convert);
 document.querySelectorAll("#target button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#target button").forEach(x => x.classList.toggle("active", x === b));
   target = b.dataset.t;
