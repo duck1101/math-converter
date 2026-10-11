@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>數學公式語法轉換器</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathml-to-latex@1.8.0/dist/bundle.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/tex2typst@0.6.2/dist/tex2typst.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7fb;
+    --card: #ffffff;
+    --text: #1f2430;
+    --muted: #6b7280;
+    --border: #e3e6ee;
+    --accent: #4f46e5;
+    --accent-soft: #eef0ff;
+    --ok: #0f9d58;
+    --ok-soft: #e7f6ee;
+    --err: #d93025;
+    --err-soft: #fdecea;
+    --mono: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161c;
+      --card: #1d2029;
+      --text: #e7e9ef;
+      --muted: #9aa1b0;
+      --border: #2e3240;
+      --accent: #8b85ff;
+      --accent-soft: #2a2950;
+      --ok: #4cc38a;
+      --ok-soft: #173327;
+      --err: #ff7b72;
+      --err-soft: #3d1f1d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 20px 16px 40px; }
+  header h1 { margin: 0; font-size: 1.6rem; }
+  header p { margin: 6px 0 0; color: var(--muted); font-size: .95rem; }
+
+  .toolbar {
+    display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center;
+    margin: 18px 0 14px; padding: 14px 16px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  }
+  .toolbar .group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .toolbar .label { font-weight: 600; font-size: .92rem; }
+  select {
+    font: inherit; font-size: .92rem; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  .detected { font-size: .85rem; color: var(--muted); }
+  .detected b { color: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    font: inherit; font-size: .9rem; padding: 6px 12px; border: none; cursor: pointer;
+    background: var(--bg); color: var(--text); border-right: 1px solid var(--border);
+  }
+  .seg button:last-child { border-right: none; }
+  @media (max-width: 520px) {
+    .seg { display: grid; grid-template-columns: repeat(3, 1fr); width: 100%; }
+    .seg button { border-bottom: 1px solid var(--border); }
+  }
+  .seg button.active { background: var(--accent); color: #fff; }
+
+  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .panes { grid-template-columns: 1fr; } }
+  .pane {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .pane-head {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: .95rem;
+  }
+  .pane-head .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn {
+    font: inherit; font-size: .82rem; padding: 5px 10px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  textarea, .output {
+    font-family: var(--mono); font-size: .9rem; line-height: 1.6;
+    width: 100%; height: 360px; padding: 12px 14px; margin: 0;
+    border: none; background: transparent; color: var(--text);
+    overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  textarea { resize: vertical; outline: none; }
+  .output .conv { background: var(--ok-soft); border-radius: 3px; }
+  .output .fail { background: var(--err-soft); color: var(--err); border-radius: 3px; text-decoration: wavy underline; }
+  .placeholder { color: var(--muted); font-family: inherit; }
+
+  .stats {
+    margin: 14px 0; padding: 10px 14px; border-radius: 10px; font-size: .92rem;
+    background: var(--accent-soft); display: flex; flex-wrap: wrap; gap: 6px 18px;
+  }
+  .stats .ok { color: var(--ok); font-weight: 600; }
+  .stats .err { color: var(--err); font-weight: 600; }
+
+  .preview { padding: 14px 18px; line-height: 1.9; white-space: pre-wrap; word-break: break-word; min-height: 80px; }
+  .preview .katex-display { margin: .4em 0; overflow-x: auto; overflow-y: hidden; }
+  .preview .fail { color: var(--err); background: var(--err-soft); font-family: var(--mono); }
+
+  .legend { font-size: .8rem; color: var(--muted); font-weight: 400; }
+  .legend span { padding: 0 4px; border-radius: 3px; }
+  .warn { color: var(--err); font-size: .88rem; margin-top: 8px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 90px);
+    background: var(--text); color: var(--bg); padding: 9px 18px; border-radius: 9px;
+    transition: transform .25s; font-size: .92rem; z-index: 10;
+  }
+  .toast.show { transform: translate(-50%, 0); }
+  footer { margin-top: 24px; font-size: .8rem; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>∑ 數學公式語法轉換器</h1>
+    <p>貼上整段筆記，自動偵測公式語法，一鍵轉換成 LaTeX／Markdown／GitHub／MathML／Typst。</p>
+  </header>
+
+  <div class="toolbar">
+    <div class="group">
+      <span class="label">來源</span>
+      <select id="source">
+        <option value="auto">自動偵測</option>
+        <option value="latex">LaTeX</option>
+        <option value="markdown">Markdown</option>
+        <option value="github">GitHub Markdown</option>
+        <option value="mathml">MathML</option>
+        <option value="typst">Typst</option>
+      </select>
+      <span class="detected" id="detected"></span>
+    </div>
+    <div class="group">
+      <span class="label">目標</span>
+      <div class="seg" id="target">
+        <button data-t="latex">LaTeX</button>
+        <button data-t="markdown" class="active">Markdown</button>
+        <button data-t="github">GitHub</button>
+        <button data-t="mathml">MathML</button>
+        <button data-t="typst">Typst</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panes">
+    <section class="pane">
+      <div class="pane-head">
+        <span>輸入（貼上筆記）</span>
+        <div class="actions">
+          <span class="legend">範例：</span>
+          <button class="btn" data-sample="latex">ChatGPT</button>
+          <button class="btn" data-sample="markdown">Obsidian</button>
+          <button class="btn" data-sample="github">GitHub</button>
+          <button class="btn" data-sample="mathml">MathML</button>
+          <button class="btn" data-sample="typst">Typst</button>
+          <button class="btn" id="clearBtn">清空</button>
+        </div>
+      </div>
+      <textarea id="input" spellcheck="false" placeholder="在這裡貼上含有數學公式的筆記，例如從 ChatGPT 複製的回答。
+
+支援的寫法：
+  LaTeX     \( x \)   \[ x \]   \begin{equation} … \end{equation}
+  Markdown  $x$   $$x$$
+  GitHub    $`x`$   ```math … ```
+  MathML    <math> … </math>
+  Typst     $x$（行內）  $ x $（獨立）
+
+也可以按上方的「範例」按鈕載入範例筆記。"></textarea>
+    </section>
+
+    <section class="pane">
+      <div class="pane-head">
+        <span>輸出（轉換結果）
+          <span class="legend"><span class="conv" style="background:var(--ok-soft)">已轉換</span> <span style="background:var(--err-soft);color:var(--err)">失敗（保留原文）</span></span>
+        </span>
+        <div class="actions">
+          <button class="btn primary" id="copyBtn">📋 複製</button>
+        </div>
+      </div>
+      <div class="output" id="output"><span class="placeholder">轉換結果會顯示在這裡。</span></div>
+    </section>
+  </div>
+
+  <div class="stats" id="stats">尚未輸入內容</div>
+
+  <section class="pane">
+    <div class="pane-head"><span>預覽（KaTeX）</span></div>
+    <div class="preview" id="preview"><span class="placeholder">公式的實際樣子會顯示在這裡，可以用來確認有沒有轉壞。</span></div>
+  </section>
+  <div class="warn" id="libWarn"></div>
+
+  <footer>Made with Vibe Coding · 使用 KaTeX、mathml-to-latex、tex2typst</footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================== 範例 ================== */
+const SAMPLES = {
+  latex:
+`二次方程式 \\( ax^2+bx+c=0 \\) 的解為：
+\\[
+x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}
+\\]
+其中判別式為 \\( \\Delta = b^2 - 4ac \\)。
+
+高斯積分：
+\\begin{equation}
+\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}
+\\end{equation}
+
+（金額不會被轉換：午餐 $100，晚餐 $200）`,
+  markdown:
+`畢氏定理：$a^2 + b^2 = c^2$，空白寫錯也能修正：$ \\sin^2\\theta + \\cos^2\\theta = 1 $
+
+$$
+\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}
+$$
+
+程式碼區塊不會被轉換：
+\`\`\`python
+price = "$5"  # \\[ 這不是公式 \\]
+\`\`\``,
+  github:
+`矩陣乘法 $\`AB \\neq BA\`$ 一般不成立。
+
+\`\`\`math
+A = \\begin{bmatrix} 1 & 2 \\\\ 3 & 4 \\end{bmatrix}
+\`\`\``,
+  mathml:
+`分數：<math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>
+
+平方根：
+<math display="block"><msqrt><mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>1</mn></mrow></msqrt></math>`,
+  typst:
+`歐拉公式：$e^(i pi) + 1 = 0$
+
+$ sum_(k=1)^n k = (n(n+1))/2 $
+
+極限：$lim_(x -> 0) (sin x)/x = 1$`
+};
+
+/* ================== 工具函式 ================== */
+const $ = id => document.getElementById(id);
+const NAMES = { latex: "LaTeX", markdown: "Markdown", github: "GitHub Markdown", mathml: "MathML", typst: "Typst" };
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const CJK = /[㐀-鿿＀-￯　-〿]/;
+
+function libs() {
+  const M = window.MathMLToLaTeX;
+  return {
+    katex: window.katex,
+    mml2tex: M ? (M.MathMLToLaTeX || M) : null,
+    tex2typst: typeof window.tex2typst === "function" ? window.tex2typst : (window.tex2typst && window.tex2typst.tex2typst),
+    typst2tex: typeof window.typst2tex === "function" ? window.typst2tex : (window.tex2typst && window.tex2typst.typst2tex)
+  };
+}
+
+/* 判斷 $...$ 內容比較像 Typst 還是 LaTeX */
+const TYPST_HINT = /\b(frac|sqrt|root|sum|prod|integral|lim|vec|hat|overline|underline|binom|mat|cases|abs|norm|floor|ceil)\(|\b(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|phi|omega|infinity|partial|nabla|times|dot|arrow)\b|[\^_]\(|->|<=>|"[^"]*"/;
+function looksTypst(c) { return !/\\[a-zA-Z]/.test(c) && TYPST_HINT.test(c); }
+
+/* 判斷一個 $...$ 是不是金額之類的普通文字 */
+function isMoney(content, after, mode) {
+  if (/^\d/.test(after)) return true;                       // $5 ... $3 的結尾後面接數字
+  const plain = content.replace(/\\text\{[^}]*\}|"[^"]*"/g, "");
+  if (CJK.test(plain)) return true;                         // 公式裡出現中文（不在 \text 裡）
+  if (mode !== "typst" && /^\d/.test(content) && /\s$/.test(content)) return true; // $100 和 $
+  return false;
+}
+
+/* ================== 1. 掃描：把筆記切成「文字」和「公式」 ================== */
+const ENV_MAP = {
+  "equation": null, "equation*": null,
+  "align": "aligned", "align*": "aligned", "eqnarray": "aligned", "eqnarray*": "aligned",
+  "gather": "gathered", "gather*": "gathered", "multline": "gathered", "multline*": "gathered"
+};
+
+function scan(text, dollarMode) {
+  const segs = [];
+  let buf = "", i = 0;
+  const pushText = s => { buf += s; };
+  const pushMath = (lang, display, content, src) => {
+    if (buf) { segs.push({ type: "text", value: buf }); buf = ""; }
+    segs.push({ type: "math", lang, display, content, src });
+  };
+  const rules = [
+    // GitHub ```math 區塊（要在一般程式碼區塊之前）
+    [/```math[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/y, m => pushMath("latex", true, m[1], m[0])],
+    // 一般程式碼區塊：不轉換
+    [/(```|~~~)[\s\S]*?\1/y, m => pushText(m[0])],
+    // GitHub 行內 $`...`$（要在行內程式碼之前）
+    [/\$`([^`\n]+)`\$/y, m => pushMath("latex", false, m[1], m[0])],
+    // 行內程式碼：不轉換
+    [/`[^`\n]+`/y, m => pushText(m[0])],
+    // MathML
+    [/<math\b[^>]*>[\s\S]*?<\/math>/y, m => pushMath("mathml", /display\s*=\s*["']block["']/.test(m[0].slice(0, m[0].indexOf(">"))), m[0], m[0])],
+    // LaTeX 環境
+    [/\\begin\{(equation\*?|align\*?|eqnarray\*?|gather\*?|multline\*?)\}([\s\S]*?)\\end\{\1\}/y, m => {
+      const inner = m[2].trim(), wrap = ENV_MAP[m[1]];
+      pushMath("latex", true, wrap ? `\\begin{${wrap}}\n${inner}\n\\end{${wrap}}` : inner, m[0]);
+    }],
+    [/\\\[([\s\S]*?)\\\]/y, m => pushMath("latex", true, m[1], m[0])],
+    [/\\\(([\s\S]*?)\\\)/y, m => pushMath("latex", false, m[1], m[0])],
+    // 跳脫的 \$
+    [/\\\$/y, m => pushText(m[0])],
+    // $$...$$
+    [/\$\$([\s\S]+?)\$\$/y, m => pushMath(dollarMode === "typst" ? "typst" : "latex", true, m[1], m[0])],
+  ];
+  const single = dollarMode === "typst" ? /\$([^$]+?)\$/y : /\$([^$\n]+?)\$/y;
+
+  outer:
+  while (i < text.length) {
+    for (const [re, fn] of rules) {
+      re.lastIndex = i;
+      const m = re.exec(text);
+      if (m) { fn(m); i = re.lastIndex; continue outer; }
+    }
+    if (text[i] === "$") {
+      single.lastIndex = i;
+      const m = single.exec(text);
+      if (m && !isMoney(m[1], text.slice(single.lastIndex, single.lastIndex + 1), dollarMode)) {
+        if (dollarMode === "typst") {
+          const display = /^\s/.test(m[1]) && /\s$/.test(m[1]);
+          pushMath("typst", display, m[1], m[0]);
+        } else {
+          pushMath("latex", false, m[1], m[0]);
+        }
+        i = single.lastIndex; continue;
+      }
+    }
+    pushText(text[i]); i++;
+  }
+  if (buf) segs.push({ type: "text", value: buf });
+  return segs;
+}
+
+/* ================== 2. 自動偵測來源語法 ================== */
+function detect(text) {
+  const t = text.replace(/```math[\s\S]*?```/g, " MATHFENCE ")
+                .replace(/(```|~~~)[\s\S]*?\1/g, " ")
+                .replace(/\$`[^`\n]+`\$/g, " GHINLINE ")
+                .replace(/`[^`\n]+`/g, " ");
+  const score = {
+    latex: (t.match(/\\\(|\\\[|\\begin\{(equation|align|eqnarray|gather|multline)/g) || []).length,
+    github: (t.match(/MATHFENCE|GHINLINE/g) || []).length,
+    mathml: (t.match(/<math[\s>]/g) || []).length,
+    markdown: 0, typst: 0
+  };
+  // 用 Markdown 規則找出所有 $...$，再看內容像哪一種
+  const rest = t.replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|<math[\s\S]*?<\/math>/g, " ");
+  scan(rest, "markdown").forEach(s => {
+    if (s.type !== "math") return;
+    if (looksTypst(s.content)) score.typst++;
+    else score.markdown++;
+  });
+  // Typst 的 $ x $ 會被 Markdown 規則漏掉（多行），用 Typst 規則再補算
+  if (score.typst === 0) {
+    scan(rest, "typst").forEach(s => { if (s.type === "math" && looksTypst(s.content)) score.typst++; });
+  }
+  let best = null, max = 0;
+  for (const k of ["latex", "github", "mathml", "typst", "markdown"]) {
+    if (score[k] > max) { max = score[k]; best = k; }
+  }
+  return best;
+}
+
+/* ================== 3. 轉換：來源 → LaTeX → 目標 ================== */
+function toLatex(seg, L) {
+  if (seg.lang === "latex") return seg.content.trim();
+  if (seg.lang === "typst") {
+    if (!L.typst2tex) throw new Error("Typst 轉換套件尚未載入");
+    return L.typst2tex(seg.content.trim()).trim();
+  }
+  if (seg.lang === "mathml") {
+    // 如果 MathML 裡附有原本的 LaTeX（KaTeX 產生的會有），直接使用最準確
+    const doc = new DOMParser().parseFromString(seg.content, "text/html");
+    const ann = doc.querySelector('annotation[encoding="application/x-tex"]');
+    if (ann && ann.textContent.trim()) return ann.textContent.trim();
+    if (!L.mml2tex) throw new Error("MathML 轉換套件尚未載入");
+    const out = L.mml2tex.convert(seg.content);
+    if (!out || !out.trim()) throw new Error("MathML 內容無法解析");
+    return out.trim();
+  }
+}
+
+function fromLatex(tex, display, target, L) {
+  switch (target) {
+    case "latex":    return display ? `\\[\n${tex}\n\\]` : `\\(${tex}\\)`;
+    case "markdown": return display ? `$$\n${tex}\n$$` : `$${tex}$`;
+    case "github":   return display ? "```math\n" + tex + "\n```" : "$`" + tex + "`$";
+    case "mathml": {
+      if (!L.katex) throw new Error("KaTeX 尚未載入");
+      const html = L.katex.renderToString(tex, { output: "mathml", displayMode: display, throwOnError: true });
+      const m = html.match(/<math[\s\S]*<\/math>/);
+      if (!m) throw new Error("無法產生 MathML");
+      return m[0];
+    }
+    case "typst": {
+      if (!L.tex2typst) throw new Error("Typst 轉換套件尚未載入");
+      const ty = L.tex2typst(tex).trim();
+      if (!ty) throw new Error("無法轉換成 Typst");
+      return display ? `$ ${ty} $` : `$${ty}$`;
+    }
+  }
+}
+
+/* ================== 4. 主流程 ================== */
+let target = "markdown";
+
+function convert() {
+  const text = $("input").value;
+  const L = libs();
+  const chosen = $("source").value;
+  const detected = text.trim() ? detect(text) : null;
+  const src = chosen === "auto" ? detected : chosen;
+
+  $("detected").innerHTML = chosen === "auto"
+    ? (detected ? `偵測結果：<b>${NAMES[detected]}</b>` : (text.trim() ? "未偵測到公式" : ""))
+    : `（手動指定）`;
+
+  if (!text.trim()) {
+    $("output").innerHTML = `<span class="placeholder">轉換結果會顯示在這裡。</span>`;
+    $("preview").innerHTML = `<span class="placeholder">公式的實際樣子會顯示在這裡，可以用來確認有沒有轉壞。</span>`;
+    $("stats").textContent = "尚未輸入內容";
+    lastOutput = "";
+    return;
+  }
+
+  const segs = scan(text, src === "typst" ? "typst" : "markdown");
+  let out = "", html = "";
+  let needNL = false, inline = 0, block = 0, ok = 0, fail = 0;
+  const errors = [];
+
+  const emit = (str, cls, title) => {
+    out += str;
+    html += cls ? `<span class="${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(str)}</span>` : esc(str);
+  };
+
+  for (const s of segs) {
+    if (s.type === "text") {
+      let v = s.value;
+      if (needNL && !/^\r?\n/.test(v)) v = "\n" + v.replace(/^[ \t]+/, "");
+      needNL = false;
+      emit(v);
+      continue;
+    }
+    s.display ? block++ : inline++;
+    try {
+      const tex = toLatex(s, L);
+      if (!tex) throw new Error("公式內容是空的");
+      s.tex = tex;
+      const res = fromLatex(tex, s.display, target, L);
+      // 獨立公式自己一行
+      if (s.display && out && !/\n$/.test(out)) { out = out.replace(/[ \t]+$/, ""); html = html.replace(/[ \t]+$/, ""); emit("\n"); }
+      emit(res, "conv", `來源：${NAMES[s.lang === "latex" ? (src || "latex") : s.lang]}`);
+      needNL = s.display;
+      ok++;
+    } catch (e) {
+      fail++;
+      s.error = e.message || String(e);
+      errors.push(s.error);
+      emit(s.src, "fail", "轉換失敗：" + s.error);
+      needNL = false;
+    }
+  }
+
+  lastOutput = out;
+  $("output").innerHTML = html || `<span class="placeholder">（沒有內容）</span>`;
+
+  // 統計
+  const total = inline + block;
+  $("stats").innerHTML = total === 0
+    ? "沒有偵測到公式，內容保持原樣。"
+    : `<span>來源：<b>${NAMES[src] || "—"}</b> → 目標：<b>${NAMES[target]}</b></span>
+       <span>偵測到 <b>${inline}</b> 個行內公式、<b>${block}</b> 個獨立公式</span>
+       <span class="ok">成功 ${ok}</span>
+       <span class="${fail ? "err" : ""}">失敗 ${fail}</span>`;
+
+  // 預覽
+  let pv = "";
+  segs.forEach((s, k) => {
+    if (s.type !== "text") return;
+    // 獨立公式本身就會換行，預覽時去掉前後多的一個換行
+    let v = s.value;
+    if (segs[k - 1] && segs[k - 1].display && !segs[k - 1].error) v = v.replace(/^\r?\n/, "");
+    if (segs[k + 1] && segs[k + 1].display && !segs[k + 1].error) v = v.replace(/\r?\n[ \t]*$/, "");
+    s.render = esc(v);
+  });
+  for (const s of segs) {
+    if (s.type === "text") { pv += s.render; continue; }
+    if (s.error || !L.katex) { pv += `<span class="fail" title="${esc(s.error || "KaTeX 尚未載入")}">${esc(s.src)}</span>`; continue; }
+    pv += L.katex.renderToString(s.tex, { displayMode: s.display, throwOnError: false });
+  }
+  $("preview").innerHTML = pv;
+}
+
+/* ================== 5. 事件 ================== */
+let lastOutput = "", timer;
+$("input").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(convert, 120); });
+$("source").addEventListener("change", convert);
+document.querySelectorAll("#target button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#target button").forEach(x => x.classList.toggle("active", x === b));
+  target = b.dataset.t;
+  convert();
+});
+document.querySelectorAll("[data-sample]").forEach(b => b.onclick = () => {
+  $("input").value = SAMPLES[b.dataset.sample];
+  $("source").value = "auto";
+  convert();
+});
+$("clearBtn").onclick = () => { $("input").value = ""; convert(); $("input").focus(); };
+
+$("copyBtn").onclick = async () => {
+  if (!lastOutput) return toast("沒有可以複製的內容");
+  try {
+    await navigator.clipboard.writeText(lastOutput);
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = lastOutput; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  toast("✅ 已複製到剪貼簿");
+};
+
+let toastTimer;
+function toast(msg) {
+  $("toast").textContent = msg; $("toast").classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.remove("show"), 1800);
+}
+
+window.addEventListener("load", () => {
+  const L = libs(), miss = [];
+  if (!L.katex) miss.push("KaTeX（預覽、MathML 輸出）");
+  if (!L.mml2tex) miss.push("mathml-to-latex（MathML 輸入）");
+  if (!L.tex2typst || !L.typst2tex) miss.push("tex2typst（Typst 轉換）");
+  if (miss.length) $("libWarn").textContent = "⚠ 以下套件載入失敗，相關功能暫時無法使用：" + miss.join("、");
+  convert();
+});
+</script>
+</body>
+</html>
